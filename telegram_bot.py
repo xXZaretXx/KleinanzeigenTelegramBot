@@ -17,6 +17,7 @@ import subprocess
 import datetime
 import kleinanzeigenbot
 import json
+import os
 
 # Setzen Sie hier Ihren Bot-Token ein
 BOT_TOKEN = ""
@@ -209,6 +210,27 @@ async def sleep_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     # Erstellen des Process-Objekts mithilfe der create_worker_process-Funktion
     # Hier verwenden Sie die Werte aus context.user_data
+    # Persistenz anlegen
+    file_name=f"data/{chat_id }.json"
+    if os.path.isfile(file_name):
+        with open(file_name,"r") as f:
+            json_data = json.load(f)
+        slot=len(json_data)
+    else:
+        json_data = {}
+        slot=0
+
+    json_data[slot] = {}
+    json_data[slot]['search_term']      = context.user_data["search_term"]
+    json_data[slot]['sleep_time']       = context.user_data["sleep_time"]
+    json_data[slot]['search_category']  = context.user_data["search_category"]
+    json_data[slot]['search_price_min'] = context.user_data["search_price_min"]
+    json_data[slot]['search_price_max'] = context.user_data["search_price_max"]
+
+
+    with open(file_name,"w") as f:
+        json.dump(json_data, f)
+
     process, worker_info = create_worker_process(
         context.user_data["search_term"],
         context.user_data["sleep_time"],
@@ -301,6 +323,35 @@ async def list_worker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     await update.message.reply_text(worker_info_str)
 
+async def reload_worker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id=update.effective_chat.id
+    file_name=f"data/{chat_id}.json"
+    if os.path.isfile(file_name):
+        with open(file_name,"r") as f:
+            json_data = json.load(f)
+    else:
+        await update.message.reply_text("Keine Worker gespeichert")
+        return
+    chat_ids_for_notifications.add(chat_id)
+    for i in json_data:
+        process, worker_info = create_worker_process(
+        json_data[i]["search_term"],
+        json_data[i]["sleep_time"],
+        json_data[i]["search_category"],
+        json_data[i]["search_price_min"],
+        json_data[i]["search_price_max"],
+        )
+        process.start()  # Starten Sie den Worker-Prozess
+        worker_processes.append(worker_info)
+
+        await update.message.reply_text(
+            f"Worker ({worker_info['worker_id']}) gestartet mit den Einstellungen:\n"
+            f"Suchbegriff: {worker_info['search_term']}\n"
+            f"Kategorie: {worker_info['search_category']}\n"
+            f"Preisspanne: {worker_info['search_price_min']}€ - {worker_info['search_price_max']}€\n"
+            f"Suchintervall: {worker_info['sleep_time']} Sekunden\n"
+        )
+    return
 
 async def help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Diese Funktion zeigt eine Liste von Help-Optionen an.
@@ -336,6 +387,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 worker_info["process"].terminate()
                 worker_processes.remove(worker_info)  # Remove from the list
                 await query.edit_message_text(f"Worker {worker_id_to_stop} gestoppt.")
+                # Eintrag aus der Persistenz entfernen
+                file_name=f"data/{context._chat_id }.json"
+                with open(file_name,"r") as f:
+                    json_data = json.load(f)
+                search_term = worker_info["search_term"]
+                for slot, data in json_data.items():
+                    if data["search_term"] == search_term:
+                        del json_data[slot]
+                        break
+                json_data = {
+                    i: value
+                    for i, value in enumerate(json_data.values())
+                }
+                with open(file_name,"w") as f:
+                    json.dump(json_data, f)
                 return
         await query.edit_message_text(
             f"Kein Worker mit der ID {worker_id_to_stop} gefunden."
@@ -400,6 +466,7 @@ def main():
     # Definieren Sie CommandHandler
     app.add_handler(CommandHandler("stopworker", stop_worker))
     app.add_handler(CommandHandler("listworker", list_worker))
+    app.add_handler(CommandHandler('reloadworker', reload_worker))
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("help", help))
     app.add_handler(CallbackQueryHandler(button_handler))
